@@ -1,0 +1,21 @@
+# ==============================================================================
+# Optivon Code Editor - GitHub Dil Algılama Düzenleme Dosyası (.gitattributes)
+# ==============================================================================
+
+# 1. Projede C/C++ olmamasına rağmen GitHub'ın yanılmasını kesin olarak engelle:
+# Tüm .h uzantılı C++ ve C başlık dosyalarını C# (C-Sharp) ailesine dahil et.
+*.h linguist-language=C#
+WebView2.h linguist-language=C#
+WebView2EnvironmentOptions.h linguist-language=C#
+
+# 2. HTML, JS, JSON ve CS dosyalarının dil istatistiklerinde aktif olarak kalmasını sağla:
+# (Bu dosyaların algılanmasını zorunlu kılıyoruz, böylece hepsi dil barında yer alacak)
+*.cs linguist-language=C#
+*.html linguist-language=HTML
+*.js linguist-language=JavaScript
+*.json linguist-language=JSON
+
+# 3. Hazır kütüphanelerin (Örn: Ace Editor) veya kilit dosyalarının oranları şişirmesini engelle:
+*pnpm-lock.yaml* linguist-vendored
+*package.json* linguist-vendored
+*node_modules* linguist-vendored
