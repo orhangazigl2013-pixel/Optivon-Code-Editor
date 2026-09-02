@@ -1,200 +1,277 @@
 using System;
-using System.Diagnostics;
-using System.Drawing;
 using System.IO;
-using System.Runtime.InteropServices;
+using System.Drawing;
+using System.Text;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Web.Script.Serialization; // Dahili JSON dönüştürücü
 using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Web.WebView2.Core;
 
 namespace OptivonCodeEditor
 {
     public class MainForm : Form
     {
-        [DllImport("dwmapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
-
         private WebView2 webView;
         private string currentFilePath = "";
-        private JavaScriptSerializer jsonSerializer = new JavaScriptSerializer();
+        private bool isWebViewReady = false;
+        private string fileToOpenOnStartup = "";
 
-        public MainForm(string initialPath)
+        public MainForm(string[] args)
         {
-            this.Text = "Optivon Code Editor";
+            this.Text = "Optivon Code Editor - [Yeni Dosya]";
             this.Size = new Size(1100, 750);
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = Color.FromArgb(20, 20, 20);
-            this.KeyPreview = true;
+            this.BackColor = Color.FromArgb(30, 30, 30);
 
-            int useDarkMode = 1;
-            DwmSetWindowAttribute(this.Handle, 20, ref useDarkMode, sizeof(int));
+            this.SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
 
-            MenuStrip menuBar = new MenuStrip { BackColor = Color.FromArgb(30, 30, 30), ForeColor = Color.White };
-            
-            ToolStripMenuItem fileMenu = new ToolStripMenuItem("Dosya") { ForeColor = Color.White };
+            if (args != null && args.Length > 0 && File.Exists(args[0]))
+            {
+                fileToOpenOnStartup = args[0];
+            }
+
+            InitMenu();
+            InitWebView();
+        }
+
+        private void InitMenu()
+        {
+            MenuStrip menuStrip = new MenuStrip();
+
+            ToolStripMenuItem fileMenu = new ToolStripMenuItem("Dosya");
             fileMenu.DropDownItems.Add("Yeni (Ctrl+N)", null, async (s, e) => await NewFile());
             fileMenu.DropDownItems.Add("Aç (Ctrl+O)", null, async (s, e) => await OpenFile());
-            fileMenu.DropDownItems.Add("Kaydet (Ctrl+S)", null, async (s, e) => await SaveFile());
-            fileMenu.DropDownItems.Add("-");
+            fileMenu.DropDownItems.Add("Kaydet (Ctrl+S)", null, async (s, e) => await SaveFile(false));
+            fileMenu.DropDownItems.Add(new ToolStripSeparator());
             fileMenu.DropDownItems.Add("Çıkış", null, (s, e) => Application.Exit());
 
-            ToolStripMenuItem runMenu = new ToolStripMenuItem("Çalıştır") { ForeColor = Color.White };
-            runMenu.DropDownItems.Add("Çalıştır (F5)", null, async (s, e) => await RunCode());
+            ToolStripMenuItem runMenu = new ToolStripMenuItem("Çalıştır");
+            runMenu.DropDownItems.Add("Çalıştır (F5)", null, async (s, e) => await SaveFile(true));
 
-            menuBar.Items.Add(fileMenu);
-            menuBar.Items.Add(runMenu);
-            this.MainMenuStrip = menuBar;
-            this.Controls.Add(menuBar);
+            menuStrip.Items.Add(fileMenu);
+            menuStrip.Items.Add(runMenu);
 
-            webView = new WebView2 { Dock = DockStyle.Fill };
+            this.MainMenuStrip = menuStrip;
+            this.Controls.Add(menuStrip);
+        }
+
+        private async void InitWebView()
+        {
+            webView = new WebView2
+            {
+                Dock = DockStyle.Fill
+            };
             this.Controls.Add(webView);
             webView.BringToFront();
 
-            this.KeyDown += async (s, e) => {
-                if (e.KeyCode == Keys.F5) await RunCode();
-                else if (e.Control && e.KeyCode == Keys.S) await SaveFile();
-                else if (e.Control && e.KeyCode == Keys.N) await NewFile();
-                else if (e.Control && e.KeyCode == Keys.O) await OpenFile();
-            };
-
-            InitWebView(initialPath);
-        }
-
-        private async void InitWebView(string initialPath)
-        {
-            await webView.EnsureCoreWebView2Async(null);
-            
-            string htmlPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "index.html");
-            if (File.Exists(htmlPath))
+            try
             {
-                webView.CoreWebView2.Navigate(htmlPath);
-            }
-            else
-            {
-                MessageBox.Show("index.html dosyası bulunamadı!", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+                string userDataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OptivonCodeEditor");
+                
+                var options = new CoreWebView2EnvironmentOptions("--disable-features=Translate,Autofill --disable-component-update");
+                var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder, options);
+                
+                await webView.EnsureCoreWebView2Async(env);
 
-            webView.CoreWebView2.WebMessageReceived += async (s, e) => {
-                string msg = e.TryGetWebMessageAsString();
-                if (msg == "save")
+                webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+                webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+
+                webView.NavigationCompleted += async (s, e) =>
                 {
-                    await SaveFile();
-                }
-            };
+                    isWebViewReady = true;
 
-            if (!string.IsNullOrEmpty(initialPath) && File.Exists(initialPath))
+                    if (!string.IsNullOrEmpty(fileToOpenOnStartup))
+                    {
+                        await LoadFileDirectly(fileToOpenOnStartup);
+                        fileToOpenOnStartup = "";
+                    }
+                };
+
+                string htmlPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "index.html");
+                if (File.Exists(htmlPath))
+                {
+                    webView.Source = new Uri(htmlPath);
+                }
+                else
+                {
+                    MessageBox.Show("index.html dosyası bulunamadı!", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            catch (Exception ex)
             {
-                currentFilePath = initialPath;
-                string content = File.ReadAllText(initialPath);
-                await SetCodeAsync(content, GetMode(initialPath));
-                this.Text = "Optivon Code Editor - " + Path.GetFileName(initialPath);
+                MessageBox.Show("WebView2 Başlatılamadı: " + ex.Message, "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private async Task<string> GetCodeAsync()
+        private async Task LoadFileDirectly(string filePath)
         {
-            string json = await webView.ExecuteScriptAsync("getEditorContent()");
-            if (string.IsNullOrEmpty(json) || json == "null") return "";
-            return jsonSerializer.Deserialize<string>(json);
+            if (!File.Exists(filePath)) return;
+
+            currentFilePath = filePath;
+            
+            string content = await Task.Run(() => File.ReadAllText(filePath, Encoding.UTF8));
+            string mode = GetAceMode(currentFilePath);
+
+            await SetCodeAsync(content, mode);
+            this.Text = "Optivon Code Editor - " + currentFilePath;
         }
 
         private async Task SetCodeAsync(string code, string mode)
         {
-            string escapedCode = jsonSerializer.Serialize(code);
-            await webView.ExecuteScriptAsync(string.Format("setEditorContent({0}, '{1}')", escapedCode, mode));
+            if (!isWebViewReady || webView == null || webView.CoreWebView2 == null) return;
+
+            string escaped = await Task.Run(() => 
+                code.Replace("\\", "\\\\")
+                    .Replace("\"", "\\\"")
+                    .Replace("\n", "\\n")
+                    .Replace("\r", "\\r")
+                    .Replace("\t", "\\t")
+            );
+
+            string script = string.Format("setEditorContent(\"{0}\", \"{1}\");", escaped, mode);
+            await webView.CoreWebView2.ExecuteScriptAsync(script);
         }
 
         private async Task NewFile()
         {
             currentFilePath = "";
-            await SetCodeAsync("", "c_cpp");
+            await SetCodeAsync("", "text");
             this.Text = "Optivon Code Editor - [Yeni Dosya]";
         }
 
         private async Task OpenFile()
         {
-            using (OpenFileDialog ofd = new OpenFileDialog { Filter = "Tüm Desteklenenler|*.cpp;*.c;*.h;*.cs;*.py;*.txt|C++ (*.cpp)|*.cpp|C# (*.cs)|*.cs|Python (*.py)|*.py|Tüm Dosyalar (*.*)|*.*" })
+            using (OpenFileDialog ofd = new OpenFileDialog())
             {
+                ofd.Filter = "Tüm Desteklenenler|*.cpp;*.c;*.h;*.cs;*.py;*.js;*.html;*.css;*.json;*.sql;*.php;*.java;*.rs;*.go;*.ts;*.sh;*.bat;*.xml;*.yaml;*.yml;*.txt|C/C++ (*.cpp;*.c;*.h)|*.cpp;*.c;*.h|C# (*.cs)|*.cs|Python (*.py)|*.py|Web (*.html;*.css;*.js)|*.html;*.css;*.js|Tüm Dosyalar (*.*)|*.*";
                 if (ofd.ShowDialog() == DialogResult.OK)
                 {
-                    currentFilePath = ofd.FileName;
-                    string content = File.ReadAllText(currentFilePath);
-                    await SetCodeAsync(content, GetMode(currentFilePath));
-                    this.Text = "Optivon Code Editor - " + Path.GetFileName(currentFilePath);
+                    await LoadFileDirectly(ofd.FileName);
                 }
             }
         }
 
-        private async Task<bool> SaveFile()
+        private async Task SaveFile(bool executeAfterSave)
         {
+            if (!isWebViewReady || webView == null || webView.CoreWebView2 == null) return;
+
             if (string.IsNullOrEmpty(currentFilePath))
             {
-                using (SaveFileDialog sfd = new SaveFileDialog { Filter = "C++ (*.cpp)|*.cpp|C# (*.cs)|*.cs|Python (*.py)|*.py|Tüm Dosyalar (*.*)|*.*" })
+                using (SaveFileDialog sfd = new SaveFileDialog())
                 {
+                    sfd.Filter = "C++ (*.cpp)|*.cpp|C# (*.cs)|*.cs|Python (*.py)|*.py|JavaScript (*.js)|*.js|HTML (*.html)|*.html|Tüm Dosyalar (*.*)|*.*";
                     if (sfd.ShowDialog() == DialogResult.OK)
                     {
                         currentFilePath = sfd.FileName;
                     }
                     else
                     {
-                        return false;
+                        return;
                     }
                 }
             }
 
-            string code = await GetCodeAsync();
-            File.WriteAllText(currentFilePath, code);
-            this.Text = "Optivon Code Editor - " + Path.GetFileName(currentFilePath);
-            return true;
-        }
-
-        private async Task RunCode()
-        {
-            bool saved = await SaveFile();
-            if (saved && !string.IsNullOrEmpty(currentFilePath))
+            string result = await webView.CoreWebView2.ExecuteScriptAsync("getEditorContent()");
+            
+            if (result.StartsWith("\"") && result.EndsWith("\""))
             {
-                string ext = Path.GetExtension(currentFilePath).ToLower();
-                string folder = Path.GetDirectoryName(currentFilePath);
-                string fileName = Path.GetFileName(currentFilePath);
+                result = result.Substring(1, result.Length - 2);
+            }
+            
+            await Task.Run(() => {
+                string unescaped = System.Text.RegularExpressions.Regex.Unescape(result);
+                File.WriteAllText(currentFilePath, unescaped, Encoding.UTF8);
+            });
 
-                if (ext == ".cpp" || ext == ".c")
-                {
-                    string args = string.Format("/c start cmd.exe /k \"cd /d \"{0}\" && g++ \"{1}\" -o run.exe && run.exe\"", folder, fileName);
-                    Process.Start(new ProcessStartInfo {
-                        FileName = "cmd.exe",
-                        Arguments = args,
-                        UseShellExecute = true
-                    });
-                }
-                else if (ext == ".py")
-                {
-                    string args = string.Format("/c start cmd.exe /k \"cd /d \"{0}\" && python \"{1}\"\"", folder, fileName);
-                    Process.Start(new ProcessStartInfo {
-                        FileName = "cmd.exe",
-                        Arguments = args,
-                        UseShellExecute = true
-                    });
-                }
+            this.Text = "Optivon Code Editor - " + currentFilePath;
+
+            if (executeAfterSave)
+            {
+                ExecuteCode(currentFilePath);
             }
         }
 
-        private string GetMode(string path)
+        // SİYAH EKRAN / CMD PENCERESİ OLMADAN ARKA PLANDA ÇALIŞTIRMA
+        private void ExecuteCode(string filePath)
         {
-            string ext = Path.GetExtension(path).ToLower();
-            if (ext == ".cs") return "csharp";
-            if (ext == ".py") return "python";
-            if (ext == ".js") return "javascript";
-            if (ext == ".html") return "html";
-            return "c_cpp";
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
+
+            string ext = Path.GetExtension(filePath).ToLower();
+            string folder = Path.GetDirectoryName(filePath);
+            string fileName = Path.GetFileName(filePath);
+
+            string command = "";
+
+            if (ext == ".cpp" || ext == ".c")
+            {
+                command = string.Format("/c cd /d \"{0}\" && g++ \"{1}\" -o run.exe && run.exe", folder, fileName);
+            }
+            else if (ext == ".py")
+            {
+                command = string.Format("/c cd /d \"{0}\" && python \"{1}\"", folder, fileName);
+            }
+            else if (ext == ".js")
+            {
+                command = string.Format("/c cd /d \"{0}\" && node \"{1}\"", folder, fileName);
+            }
+
+            if (!string.IsNullOrEmpty(command))
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = command,
+                    UseShellExecute = false,
+                    CreateNoWindow = true, // Siyah CMD penceresini tamamen gizler
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+
+                Process.Start(psi);
+            }
+        }
+
+        private string GetAceMode(string filePath)
+        {
+            string ext = Path.GetExtension(filePath).ToLower();
+            switch (ext)
+            {
+                case ".cs": return "csharp";
+                case ".cpp":
+                case ".c":
+                case ".h":
+                case ".hpp": return "c_cpp";
+                case ".py": return "python";
+                case ".js": return "javascript";
+                case ".ts": return "typescript";
+                case ".html":
+                case ".htm": return "html";
+                case ".css": return "css";
+                case ".json": return "json";
+                case ".sql": return "sql";
+                case ".php": return "php";
+                case ".java": return "java";
+                case ".rs": return "rust";
+                case ".go": return "golang";
+                case ".sh":
+                case ".bash": return "sh";
+                case ".bat":
+                case ".cmd": return "batchfile";
+                case ".xml": return "xml";
+                case ".yaml":
+                case ".yml": return "yaml";
+                case ".md": return "markdown";
+                default: return "text";
+            }
         }
 
         [STAThread]
-        public static void Main(string[] args)
+        static void Main(string[] args)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(args.Length > 0 ? args[0] : ""));
+            Application.Run(new MainForm(args));
         }
     }
 }
